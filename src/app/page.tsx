@@ -1,42 +1,93 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getTodos, addTodo, deleteTodo } from "./lib/api";
-import TodoItem from "./components/TodoItem";
+import TodoItem from "./TodoItem/page";
+
+
+interface Todo {
+  id: number;
+  title: string;
+  completed: boolean;
+}
+
+interface MutateContext {
+  previousTodos?: Todo[];
+}
 
 const TodoList: React.FC = () => {
-  const [todos, setTodos] = useState<{ id: number; title: string; completed: boolean }[]>([]);
+  const queryClient = useQueryClient();
   const [newTodo, setNewTodo] = useState("");
 
-  useEffect(() => {
-    const fetchTodos = async () => {
-      const data = await getTodos();
-      setTodos(data);
-    };
-    fetchTodos();
-  }, []);
+   const { data: todos = [], isLoading, isError } = useQuery<Todo[]>({
+    queryKey: ["todos"],
+    queryFn: getTodos,
+  });
 
-  const handleAddTodo = async () => {
+  const addTodoMutation = useMutation<Todo, Error, string, MutateContext>({
+    mutationFn: addTodo,
+    onMutate: async (newTitle) => {
+      await queryClient.cancelQueries({ queryKey: ["todos"] });
+
+      const previousTodos = queryClient.getQueryData<Todo[]>(["todos"]);
+
+      queryClient.setQueryData<Todo[]>(["todos"], (old) => [
+        { id: Math.random(), title: newTitle, completed: false },
+        ...(old || []),
+      ]);
+
+      return { previousTodos };
+    },
+    onError: (_err, _newTodo, context) => {
+      if (context?.previousTodos) {
+        queryClient.setQueryData(["todos"], context.previousTodos);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["todos"] });
+    },
+  });
+
+  const deleteTodoMutation = useMutation<number, Error, number, MutateContext>({
+    mutationFn: deleteTodo,
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["todos"] });
+
+      const previousTodos = queryClient.getQueryData<Todo[]>(["todos"]);
+
+      queryClient.setQueryData<Todo[]>(["todos"], (old) =>
+        old?.filter((todo) => todo.id !== id) || []
+      );
+
+      return { previousTodos };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previousTodos) {
+        queryClient.setQueryData(["todos"], context.previousTodos);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["todos"] });
+    },
+  });
+
+  const handleAddTodo = () => {
     if (!newTodo.trim()) return;
-    const todo = await addTodo(newTodo);
-    setTodos([todo, ...todos]); // Оптимістичне оновлення
+    addTodoMutation.mutate(newTodo);
     setNewTodo("");
-  };
-
-  const handleDeleteTodo = async (id: number) => {
-    await deleteTodo(id);
-    setTodos(todos.filter((todo) => todo.id !== id));
   };
 
   return (
     <div className="max-w-lg mx-auto mt-10 p-5 bg-white shadow-lg rounded-lg">
       <h1 className="text-2xl font-bold mb-4">Todo App</h1>
+
       <div className="flex mb-4">
         <input
           className="flex-1 px-3 py-2 border rounded-l focus:outline-none"
           type="text"
           value={newTodo}
-          onChange={(e) => setNewTodo(e.target.value)}
+          onChange={(event) => setNewTodo(event.target.value)}
           placeholder="Add a new todo..."
         />
         <button
@@ -46,9 +97,17 @@ const TodoList: React.FC = () => {
           Add
         </button>
       </div>
+
+      {isLoading && <p>Loading...</p>}
+      {isError && <p className="text-red-500">Error loading todos!</p>}
+
       <div className="space-y-2">
         {todos.map((todo) => (
-          <TodoItem key={todo.id} todo={todo} onDelete={handleDeleteTodo} />
+          <TodoItem
+            key={todo.id}
+            todo={todo}
+            onDelete={() => deleteTodoMutation.mutate(todo.id)}
+          />
         ))}
       </div>
     </div>
